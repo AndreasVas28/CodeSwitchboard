@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>CodeSwitchboard</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <a class="brand" href="#launch" aria-label="CodeSwitchboard home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>CodeSwitchboard</strong><small>Local launcher</small></span>
+      </a>
+      <nav class="main-nav" aria-label="Main navigation">
+        <button class="nav-item active" type="button" data-view="launch"><span>↗</span>Launch</button>
+        <button class="nav-item" type="button" data-view="providers"><span>⌁</span>Providers</button>
+        <button class="nav-item" type="button" data-view="targets"><span>▦</span>Apps &amp; CLIs <b id="nav-installed-count"></b></button>
+        <button class="nav-item" type="button" data-view="activity"><span>≡</span>Activity</button>
+      </nav>
+      <div class="sidebar-status">
+        <div><span class="online-dot"></span><strong>Local session</strong></div>
+        <code>127.0.0.1</code>
+        <small>Keys encrypted for this PC</small>
+      </div>
+    </aside>
+
+    <div class="main-area">
+      <main class="content">
+        <section class="page active" data-page="launch">
+          <header class="page-header">
+            <p>CONTROL CENTER</p>
+            <h1>Launch</h1>
+            <span>Route a provider and model into an installed coding tool.</span>
+          </header>
+
+          <section class="panel route-panel">
+            <div class="panel-heading">
+              <div><h2>Launch configuration</h2><p>Everything needed for the next session.</p></div>
+              <span class="badge secure">Local only</span>
+            </div>
+            <div class="form-grid">
+              <div class="field wide">
+                <label for="workspace">Workspace</label>
+                <input id="workspace" autocomplete="off" spellcheck="false">
+              </div>
+              <div class="field">
+                <label>Provider</label>
+                <button id="provider-summary" class="selection-button" type="button" data-open-view="providers">
+                  <span class="selection-icon">P</span><span><strong id="route-provider">—</strong><small>Change provider</small></span><b>›</b>
+                </button>
+              </div>
+              <div class="field">
+                <label>App or CLI</label>
+                <button id="target-summary" class="selection-button" type="button" data-open-view="targets">
+                  <span class="selection-icon">T</span><span><strong id="route-target">Choose a target</strong><small>Change launch target</small></span><b>›</b>
+                </button>
+              </div>
+              <div class="field wide">
+                <label for="model">Model</label>
+                <div class="model-controls">
+                  <select id="model-picker" aria-label="Available models">
+                    <option value="">Load models after connecting a provider</option>
+                  </select>
+                  <input id="model" list="model-options" placeholder="Connect a provider to load models" autocomplete="off" spellcheck="false">
+                  <datalist id="model-options"></datalist>
+                  <button id="apply-model" class="button secondary" type="button">Apply model</button>
+                </div>
+                <small id="model-count">Choose an available model or type an exact model ID.</small>
+                <small id="model-switch-help" class="model-switch-help"></small>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel route-explainer">
+            <div class="panel-heading"><div><h2>How this target connects</h2><p>The routing mode changes with your selected tool.</p></div></div>
+            <div class="flow">
+              <div><span>01</span><strong>CodeSwitchboard</strong><small>Local control server</small></div>
+              <b>→</b>
+              <div><span>02</span><strong id="flow-provider">Selected provider</strong><small>Model endpoint</small></div>
+              <b>→</b>
+              <div><span>03</span><strong id="flow-target">Select an app</strong><small id="flow-routing">Waiting for target</small></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="page" data-page="providers" hidden>
+          <header class="page-header">
+            <p>CONNECTIONS</p>
+            <h1>Providers</h1>
+            <span>Add API access and load each provider’s live model catalog.</span>
+          </header>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div><h2>Provider accounts</h2><p>Choose a provider to configure it for this server session.</p></div>
+              <span id="connected-count" class="count"></span>
+            </div>
+            <div id="provider-list" class="provider-grid" aria-label="Providers"></div>
+          </section>
+
+          <section class="panel credentials-panel">
+            <div class="panel-heading">
+              <div><h2 id="provider-config-title">Provider connection</h2><p id="provider-description">Configure the selected provider.</p></div>
+              <span id="key-badge" class="badge muted">No key</span>
+            </div>
+            <div class="connection-grid">
+              <div id="base-url-field" class="field wide hidden">
+                <label for="base-url">OpenAI-compatible base URL</label>
+                <input id="base-url" type="url" placeholder="https://provider.example/v1" autocomplete="off" spellcheck="false">
+              </div>
+              <div class="field grow">
+                <label for="api-key">API key</label>
+                <div class="input-action">
+                  <input id="api-key" type="password" placeholder="Paste a key for this session" autocomplete="off" spellcheck="false">
+                  <button id="toggle-key" class="icon-button" type="button" aria-label="Show key">Show</button>
+                </div>
+              </div>
+              <button id="connect-provider" class="button primary" type="button">Connect &amp; load models</button>
+              <button id="forget-key" class="button secondary" type="button">Forget key</button>
+            </div>
+            <p class="security-note"><span>◆</span> Keys are DPAPI-encrypted for this Windows user and are never returned by the API.</p>
+          </section>
+        </section>
+
+        <section class="page" data-page="targets" hidden>
+          <header class="page-header">
+            <p>INSTALLED TOOLS</p>
+            <h1>Apps &amp; CLIs</h1>
+            <span>Select what CodeSwitchboard should launch in your workspace.</span>
+          </header>
+          <section class="panel">
+            <div class="panel-heading">
+              <div><h2>Launch targets</h2><p>Unavailable choices remain visible so installation status is clear.</p></div>
+              <div class="heading-actions"><span id="target-count" class="count"></span><button id="refresh-state" class="button secondary small" type="button">Rescan</button></div>
+            </div>
+            <div id="target-list" class="target-grid"></div>
+          </section>
+        </section>
+
+        <section class="page" data-page="activity" hidden>
+          <header class="page-header">
+            <p>SESSION LOG</p>
+            <h1>Activity</h1>
+            <span>Connection, model-catalog, and launcher results from this run.</span>
+          </header>
+          <section class="panel activity-panel">
+            <div class="panel-heading">
+              <div><h2>Recent activity</h2><p>This log disappears when the local server stops.</p></div>
+              <button id="clear-activity" class="button secondary small" type="button">Clear</button>
+            </div>
+            <ol id="activity" aria-live="polite"></ol>
+          </section>
+        </section>
+      </main>
+
+      <footer class="action-bar">
+        <div class="action-state"><span id="action-dot"></span><div><strong id="action-title">Choose a launch target</strong><small id="action-detail">Configuration is incomplete</small></div></div>
+        <div class="action-buttons">
+          <button id="restore-codex" class="button secondary" type="button">Restore Codex account</button>
+          <button id="restore-claude" class="button secondary" type="button">Restore Claude account</button>
+          <button id="test-target" class="button secondary" type="button" hidden>Send test message</button>
+          <button id="launch" class="button launch-button" type="button" disabled><span>Launch selected tool</span><b>↗</b></button>
+        </div>
+      </footer>
+    </div>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

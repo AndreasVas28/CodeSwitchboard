@@ -1,0 +1,25 @@
+{
+  "name": "codeswitchboard",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Local provider switchboard for coding apps and CLIs",
+  "bin": {
+    "csb": "bin/csb.js",
+    "codeswitchboard": "bin/codeswitchboard-server.js",
+    "codeswitchboard-server": "bin/codeswitchboard-server.js",
+    "free-codex": "bin/free-codex.js"
+  },
+  "scripts": {
+    "start": "node bin/codeswitchboard-server.js",
+    "legacy:codex": "node bin/free-codex.js",
+    "test": "node --test test/*.test.js",
+    "link-cli": "npm link"
+  },
+  "dependencies": {
+    "@iarna/toml": "^2.2.5",
+    "node-pty": "^1.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
