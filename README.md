@@ -70,16 +70,15 @@ codeswitchboard-server
 | DeepSeek Harness Web | Provider routed | Starts with a temporary CodeSwitchboard profile through the local Responses bridge. |
 | Hermes Agent | Provider routed | Runs its OpenAI API mode through the local Responses bridge. |
 | Gemini CLI | Provider routed | Runs a local Gemini-protocol bridge and supplies only a dummy loopback key to Gemini CLI. |
-| Void | Provider routed | Opens the workspace for its OpenAI-compatible picker; its first launch needs the local gateway entered once. |
 | VS Code | Workspace only | Opens the workspace; installed AI extensions keep control of their own authentication. |
 
 Claude sessions receive only a loopback bridge URL and a dummy local bridge token. The selected provider key remains in the CodeSwitchboard server process and is never passed to Claude Code.
 
-Cursor and Windsurf are intentionally not offered because their built-in agents require vendor accounts. Void provides an OpenAI-compatible, account-free editor path.
+Cursor, Windsurf, Kiro, and Void are intentionally not offered because their built-in agents require vendor accounts or lack a supported routing path.
 
 ## Change models after launch
 
-CodeSwitchboard passes the selected provider's complete model catalog into each supported routed tool. Every routed CLI now accepts the same command:
+CodeSwitchboard passes the selected provider's complete model catalog into each supported routed tool. Most routed CLIs accept the same command:
 
 ```text
 /models
@@ -90,12 +89,13 @@ For CLIs without a native `/models` picker, CodeSwitchboard's terminal layer ope
 | Tool | Model command or picker |
 | --- | --- |
 | OpenCode | Native `/models` picker |
-| Aider, Claude Code, Codex CLI, Cline, Gemini CLI | CodeSwitchboard `/models` searchable picker |
+| Aider | Native `/model openai/<name>` command; the routed catalog is printed at launch |
+| Claude Code, Codex CLI, Gemini CLI | CodeSwitchboard `/models` searchable picker |
+| Cline | Chosen at launch or with `cline auth`; Cline 3.0.61's interactive `/model` picker crashes (upstream Cline bug) |
 | Claude Desktop | App model picker (routes to the launched model) |
 | Pi | CodeSwitchboard extension `/models` picker |
 | Hermes Agent | Native `/model` command in classic CLI mode |
 | DeepSeek Harness Web | Native `/models` picker |
-| Void | Chat model picker |
 
 The local editor gateway is `http://127.0.0.1:4242/v1`. It lists models as `provider-id/model-id`, routes them to the matching connected provider, and accepts only the loopback credential `codeswitchboard-local`. Real provider keys remain in server memory.
 

@@ -41,6 +41,8 @@ The three targets above are the only newly added targets with fresh machine-safe
 
 ## Known limitations and safety notes
 
+- Cline's interactive `/model` picker is affected by an upstream Cline CLI bug: its bundled Ink (React-for-terminals) runtime aborts with `Error: Text must be created inside of a text node` while rendering the picker. `scripts/repro-cline-model.js` reproduces it against a deterministic localhost mock (Cline 3.0.61, latest at the time of testing), and no request to the model endpoint precedes the crash, so CodeSwitchboard's bridge shape is not implicated. Model selection still works at launch (`--model`), via `cline auth`, and by editing the isolated `providers.json` that CodeSwitchboard writes per launch; the picker itself must be fixed upstream.
+
 - No live provider test was run. Do not infer NVIDIA quota or model availability from the mock pass.
 - No live Codex inference test was run.
 - Claude Desktop uses an explicit managed `inferenceModels` registry list with model discovery disabled because Claude Desktop auto-discovery can hide opaque non-Claude IDs. Restore removes only CodeSwitchboard-owned policy values.

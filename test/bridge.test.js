@@ -57,6 +57,36 @@ test('falls back to the selected model when no model list is configured', async 
   assert.deepEqual(payload.data.map((model) => model.id), ['test/fallback']);
 });
 
+test('retries upstream rate limits instead of failing the request', async (context) => {
+  let upstreamRequests = 0;
+  const upstream = http.createServer(async (request, response) => {
+    let raw = '';
+    for await (const chunk of request) raw += chunk;
+    upstreamRequests += 1;
+    if (upstreamRequests === 1) {
+      response.writeHead(429, { 'content-type': 'application/json', 'retry-after': '0' });
+      response.end(JSON.stringify({ error: { message: 'Rate limit exceeded' } }));
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'recovered' } }] }));
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => upstream.close(resolve)));
+
+  const bridge = await startBridge({ port: 0, upstreamBaseUrl: `http://127.0.0.1:${upstream.address().port}/v1`, apiKey: 'k', providerName: 'test', model: 'test/model' });
+  context.after(() => new Promise((resolve) => bridge.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${bridge.port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'test/model', messages: [{ role: 'user', content: 'hi' }] })
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).choices[0].message.content, 'recovered');
+  assert.equal(upstreamRequests, 2);
+});
+
 test('keeps output indices consistent when tool calls arrive before text', async (context) => {
   const upstream = http.createServer((request, response) => {
     const chunks = [
