@@ -2,3 +2,13 @@ node_modules/
 dist/
 *.log
 .aider*
+.freebuff/
+.env
+.env.*
+!.env.example
+coverage/
+*.tgz
+*.pem
+*.key
+auth.json
+config.local.json

@@ -31,7 +31,7 @@ The verifier checks that the mock provider received an authenticated request thr
 - `native-account` targets require their vendor account and are not provider-routed.
 - Extensions are catalog entries only until isolated editor-profile installation and verification are implemented.
 
-The three targets above are the only newly added targets with fresh machine-safe evidence in this handoff. Existing Codex, Claude, OpenCode, Aider, Pi, Cline, DeepSeek Harness, Hermes, Gemini, and Void entries retain their prior adapter implementations but should not be treated as freshly verified solely from catalog metadata.
+The table records historical local-mock results, not universal compatibility. Existing Codex, Claude, OpenCode, Aider, Pi, Cline, DeepSeek Harness, Hermes, and Gemini adapters should not be treated as freshly verified solely from catalog metadata. Cursor Agent CLI, Cursor, Windsurf, Kiro CLI, Kiro IDE, and Void were removed from the active catalog.
 
 ## Official installation sources
 

@@ -1,5 +1,31 @@
 # CodeSwitchboard
 
+A Windows-first local launcher for AI coding apps and CLIs. Choose a provider,
+model, and workspace in your browser or PowerShell, then launch an installed tool.
+This is an independent experimental project. Compatibility depends on the target,
+provider, model capabilities, and installed versions; see [target status](docs/TARGET_STATUS.md).
+
+## Install from GitHub
+
+Install Node.js 20 or newer and Git, then run in PowerShell:
+
+```powershell
+git clone https://github.com/AndreasVas28/CodeSwitchboard.git
+cd CodeSwitchboard
+npm ci
+npm link
+csb open
+```
+
+If `csb` is not found, reopen PowerShell or run `node bin/csb.js open` from
+this directory. If native dependency installation requires compilation, install
+the Windows C++ build tools and Python requested by node-gyp. Target applications
+are installed separately. Use `csb catalog`, `csb target info <id>`, and
+`csb install <id>` to inspect and install supported packages.
+
+This repository distributes source code; it has no signed Windows installer
+or published npm package. Provider usage may require credits or a paid API plan.
+
 ## PowerShell command
 
 Use `csb` from any directory:
@@ -44,7 +70,7 @@ codeswitchboard-server --port 5050 --no-open
 Then:
 
 1. Choose NVIDIA NIM, OpenRouter, Groq, Together AI, Fireworks, DeepInfra, Cerebras, SambaNova, or a custom OpenAI-compatible endpoint.
-2. Paste a session API key and load the live model catalog.
+2. Enter a provider API key and load the live model catalog. Keys and selections are saved locally.
 3. Choose a workspace and an installed app or CLI.
 4. Launch it.
 
@@ -71,26 +97,23 @@ codeswitchboard-server
 | Hermes Agent | Provider routed | Runs its OpenAI API mode through the local Responses bridge. |
 | Gemini CLI | Provider routed | Runs a local Gemini-protocol bridge and supplies only a dummy loopback key to Gemini CLI. |
 | VS Code | Workspace only | Opens the workspace; installed AI extensions keep control of their own authentication. |
+| Crush, Qwen Code, Kilo Code CLI | Provider routed | Supplies isolated OpenAI-compatible configuration and the selected model. |
+| GitHub Copilot CLI | Native account | Opens the CLI with its own vendor account and model picker. |
 
 Claude sessions receive only a loopback bridge URL and a dummy local bridge token. The selected provider key remains in the CodeSwitchboard server process and is never passed to Claude Code.
 
-Cursor, Windsurf, Kiro, and Void are intentionally not offered because their built-in agents require vendor accounts or lack a supported routing path.
+Cursor Agent CLI, Cursor, Windsurf, Kiro CLI, Kiro IDE, and Void are excluded from the active catalog.
 
 ## Change models after launch
 
-CodeSwitchboard passes the selected provider's complete model catalog into each supported routed tool. Most routed CLIs accept the same command:
-
-```text
-/models
-```
-
-For CLIs without a native `/models` picker, CodeSwitchboard's terminal layer opens a searchable selector and translates the choice to the tool's native switch command without modifying the installed vendor package.
+Choose the model in the dashboard before launching. In-session switching depends
+on the tool; a universal `/models` command is not available in every CLI.
 
 | Tool | Model command or picker |
 | --- | --- |
 | OpenCode | Native `/models` picker |
 | Aider | Native `/model openai/<name>` command; the routed catalog is printed at launch |
-| Claude Code, Codex CLI, Gemini CLI | CodeSwitchboard `/models` searchable picker |
+| Claude Code, Codex CLI, Gemini CLI, Crush, Qwen Code, Kilo CLI | Change the dashboard selection and relaunch |
 | Cline | Chosen at launch or with `cline auth`; Cline 3.0.61's interactive `/model` picker crashes (upstream Cline bug) |
 | Claude Desktop | App model picker (routes to the launched model) |
 | Pi | CodeSwitchboard extension `/models` picker |
@@ -140,3 +163,23 @@ node scripts\verify-target-messages.js
 ```
 
 The dashboard also shows **Send test message** for each routed non-Codex CLI. That test uses the selected live provider and confirms the tool returned `CODESWITCHBOARD_OK`.
+
+## Troubleshooting and restore
+
+- Run `csb info` and `csb doctor <target-id>` for configuration and installation diagnostics.
+- If a model is retired or unavailable, run `csb models <provider>` and choose a current model.
+- If a tool requests vendor login, check its mode: native-account tools require that login. For routed tools, confirm that the launch came from CodeSwitchboard.
+- For localhost connection failures, check that CodeSwitchboard is running and relaunch the target. Keep the full redacted error, including its HTTP status.
+- Restore desktop account settings with `csb restore claude` or `csb restore codex` before removing CodeSwitchboard. These commands may restart the relevant app.
+- `csb stop` stops the dashboard and its managed bridges. The separately launched Codex Desktop bridge has its own restore command.
+
+Settings are stored at `%LOCALAPPDATA%\CodeSwitchboard\config.json`. Use
+`csb key remove <provider>` to remove a saved key. To update a clean checkout,
+run `git pull --ff-only` and `npm ci`, then restart the dashboard.
+
+## Development and licensing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md),
+[CHANGELOG.md](CHANGELOG.md), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Original CodeSwitchboard code is licensed under [MIT](LICENSE). Third-party
+applications and services retain their own licenses and terms.
