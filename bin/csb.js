@@ -2,7 +2,9 @@
 'use strict';
 
 const path = require('path');
-const { spawn } = require('child_process');
+const os = require('os');
+const fs = require('fs');
+const { spawn, spawnSync } = require('child_process');
 
 const ROOT = 'http://127.0.0.1:4242';
 const SERVER = path.join(__dirname, 'codeswitchboard-server.js');
@@ -33,6 +35,10 @@ Usage:
   csb select target <id>             Save the default app or CLI
   csb select workspace <path>        Save the default workspace
   csb launch [target] [options]      Launch using saved defaults
+  csb uninstall [--purge] [--keep-apps] [--yes]
+                                 Restore apps, stop the server, and remove the
+                                 global csb command; --purge also deletes saved
+                                 settings and bridge state
   csb restore claude|codex           Restore the app's normal account
 
 Launch options:
@@ -104,16 +110,120 @@ function parseLaunch(args) {
   return result;
 }
 
+async function confirm(question) {
+  if (!process.stdin.isTTY) return false;
+  process.stdout.write(`${question} `);
+  process.stdin.resume();
+  try {
+    for await (const chunk of process.stdin) {
+      const answer = chunk.toString().trim().toLowerCase();
+      return answer === '' || answer === 'y' || answer === 'yes';
+    }
+  } finally { process.stdin.pause(); }
+  return false;
+}
+
+async function stopServer() {
+  if (!await serverAvailable()) return false;
+  await request('/api/shutdown', { method: 'POST', body: '{}' });
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline && await serverAvailable()) await new Promise((resolve) => setTimeout(resolve, 100));
+  if (await serverAvailable()) throw new Error('The server did not stop within 5 seconds.');
+  return true;
+}
+
+function npmCommand() { return process.platform === 'win32' ? 'npm.cmd' : 'npm'; }
+
+function removeGlobalCommand() {
+  const result = spawnSync(npmCommand(), ['uninstall', '-g', 'codeswitchboard'], { encoding: 'utf8', shell: false });
+  if (result.status !== 0) console.log(`npm uninstall -g codeswitchboard failed (${(result.stderr || result.stdout || '').trim().split('\n')[0]}); removing the command files directly.`);
+  const prefixResult = spawnSync(npmCommand(), ['prefix', '-g'], { encoding: 'utf8', shell: false });
+  if (prefixResult.status !== 0 || !prefixResult.stdout) return;
+  const prefix = prefixResult.stdout.trim();
+  const binDir = process.platform === 'win32' ? prefix : path.join(prefix, 'bin');
+  const modulesDir = path.join(prefix, 'node_modules', 'codeswitchboard');
+  const owned = ['csb', 'codeswitchboard', 'codeswitchboard-server', 'free-codex'];
+  const extensions = process.platform === 'win32' ? ['', '.cmd', '.ps1'] : [''];
+  let removed = 0;
+  for (const name of owned) {
+    for (const extension of extensions) {
+      const file = path.join(binDir, name + extension);
+      if (fs.existsSync(file)) { try { fs.rmSync(file, { force: true }); removed++; } catch { /* keep going */ } }
+    }
+  }
+  if (fs.existsSync(modulesDir)) { try { fs.rmSync(modulesDir, { recursive: true, force: true }); removed++; } catch { /* keep going */ } }
+  if (removed) console.log(`Removed ${removed} leftover command file${removed === 1 ? '' : 's'} from ${binDir}.`);
+}
+
+function restoreAppsDirectly() {
+  const warnings = [];
+  const legacyLauncher = path.join(__dirname, 'free-codex.js');
+  const codex = spawnSync(process.execPath, [legacyLauncher, 'launch', 'codex-app', '--restore'], { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  if (codex.status === 0) console.log((codex.stdout || 'Codex restored to its normal account configuration.').trim());
+  else warnings.push(`Codex restore skipped: ${(codex.stderr || codex.stdout || `exit ${codex.status}`).trim().split('\n')[0]}`);
+  try {
+    const { TargetLauncher } = require('../lib/target-registry');
+    const result = new TargetLauncher({ legacyLauncherPath: legacyLauncher }).restoreClaudeDesktop();
+    console.log(result.message);
+  } catch (error) {
+    warnings.push(`Claude Desktop restore skipped: ${error.message.split('\n')[0]}`);
+  }
+  return warnings;
+}
+
+function purgeSavedState() {
+  const removed = [];
+  try {
+    const { defaultStorePath } = require('../lib/persistent-store');
+    const settings = defaultStorePath();
+    if (fs.existsSync(settings)) { fs.rmSync(settings, { force: true }); removed.push(settings); }
+  } catch { /* settings path unavailable; skip */ }
+  const codexHome = path.join(os.homedir(), '.codex');
+  for (const name of ['free-codex-launch.json', 'free-codex-bridge.log', 'free-codex-nvidia-models.json', 'config.toml.free-codex-backup']) {
+    const file = path.join(codexHome, name);
+    if (fs.existsSync(file)) { try { fs.rmSync(file, { force: true }); removed.push(file); } catch { /* keep going */ } }
+  }
+  const backups = path.join(codexHome, 'free-codex-backups');
+  if (fs.existsSync(backups)) { try { fs.rmSync(backups, { recursive: true, force: true }); removed.push(backups); } catch { /* keep going */ } }
+  for (const item of removed) console.log(`Removed ${item}`);
+  return removed.length;
+}
+
 async function main(argv = process.argv.slice(2)) {
   const [command = 'info', ...args] = argv;
   if (['help', '--help', '-h'].includes(command)) { usage(); return; }
   if (command === 'stop') {
-    if (!await serverAvailable()) { console.log('CodeSwitchboard is already stopped.'); return; }
-    await request('/api/shutdown', { method: 'POST', body: '{}' });
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline && await serverAvailable()) await new Promise((resolve) => setTimeout(resolve, 100));
-    if (await serverAvailable()) throw new Error('The server did not stop within 5 seconds.');
-    console.log('CodeSwitchboard stopped.');
+    if (await stopServer()) console.log('CodeSwitchboard stopped.');
+    else console.log('CodeSwitchboard is already stopped.');
+    return;
+  }
+  if (command === 'uninstall') {
+    const purge = args.includes('--purge');
+    const keepApps = args.includes('--keep-apps');
+    const assumeYes = args.includes('--yes');
+    const unknown = args.filter((flag) => !['--purge', '--keep-apps', '--yes'].includes(flag));
+    if (unknown.length) throw new Error(`Unknown option: ${unknown[0]}. Use: csb uninstall [--purge] [--keep-apps] [--yes]`);
+    if (!assumeYes) {
+      const summary = [`Restore Codex and Claude Desktop to their normal accounts`, 'stop the dashboard', 'remove the global csb command'];
+      if (purge) summary.push('delete saved settings and bridge state');
+      if (!await confirm(`Uninstall CodeSwitchboard? This will ${summary.join(', ')}. Continue? [Y/n]`)) { console.log('Cancelled.'); return; }
+    }
+    const serverWasRunning = await serverAvailable();
+    if (keepApps) console.log('Skipping app restore (--keep-apps).');
+    else if (serverWasRunning) {
+      for (const app of ['codex', 'claude']) {
+        try { const result = await request(`/api/restore-${app}`, { method: 'POST', body: '{}' }); console.log(result.message); }
+        catch (error) { console.log(`${app === 'codex' ? 'Codex' : 'Claude Desktop'} restore skipped: ${error.message.split('\n')[0]}`); }
+      }
+    } else {
+      console.log('Server is not running; restoring apps directly.');
+      for (const warning of restoreAppsDirectly()) console.log(warning);
+    }
+    if (await stopServer()) console.log('CodeSwitchboard stopped.');
+    removeGlobalCommand();
+    if (purge) purgeSavedState();
+    else console.log(`Saved settings were kept. Delete them later with: csb uninstall --purge --yes${serverWasRunning ? '' : ''}`);
+    console.log('CodeSwitchboard uninstalled. You can delete this repository folder whenever you like.');
     return;
   }
   if (command === 'server') {

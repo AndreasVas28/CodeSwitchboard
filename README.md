@@ -195,6 +195,35 @@ csb restore codex
 
 This stops the managed bridge, restores the original Codex configuration, changes the most recently routed task back to the built-in OpenAI provider, and reopens it with the saved real account. Existing backups remain under `~/.codex/free-codex-backups` for compatibility with earlier versions.
 
+## Uninstall
+
+From any terminal, inside or outside the repository:
+
+```powershell
+csb uninstall
+```
+
+This restores Codex and Claude Desktop to their normal accounts, stops the
+dashboard and its bridges, and removes the global `csb` command. Saved settings
+are kept unless you add `--purge`, and app restores can be skipped with
+`--keep-apps`. Use `--yes` to skip the confirmation prompt:
+
+```powershell
+csb uninstall --purge --yes
+```
+
+Standalone uninstallers are also included in the repository:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\uninstall.ps1 [-Purge] [-KeepApps]
+```
+
+```bash
+bash uninstall.sh [--purge] [--keep-apps]
+```
+
+After uninstalling, the repository folder can simply be deleted.
+
 ## Requirements
 
 - Node.js 20 or newer
@@ -225,7 +254,7 @@ The dashboard also shows **Send test message** for each routed non-Codex CLI. Th
 - `csb stop` stops the dashboard and its managed bridges. The separately launched Codex Desktop bridge has its own restore command.
 
 Settings are stored at `%LOCALAPPDATA%\CodeSwitchboard\config.json` (Windows) or `~/.local/state/codeswitchboard/config.json` (macOS and Linux). Use
-`csb key remove <provider>` to remove a saved key. To update a clean checkout,
+`csb key remove <provider>` to remove a saved key, or `csb uninstall --purge` to remove all saved state. To update a clean checkout,
 run `git pull --ff-only` and `npm ci`, then restart the dashboard.
 
 ## Development and licensing
