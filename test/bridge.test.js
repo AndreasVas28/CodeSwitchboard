@@ -87,6 +87,159 @@ test('retries upstream rate limits instead of failing the request', async (conte
   assert.equal(upstreamRequests, 2);
 });
 
+test('wraps opaque upstream failures with the model and next step', async (context) => {
+  const upstream = http.createServer((request, response) => {
+    response.writeHead(404, { 'content-type': 'text/plain' });
+    response.end('404 page not found');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => upstream.close(resolve)));
+
+  const bridge = await startBridge({ port: 0, upstreamBaseUrl: `http://127.0.0.1:${upstream.address().port}/v1`, apiKey: 'k', providerName: 'nvidia', model: 'test/model', gateway404Attempts: 0 });
+  context.after(() => new Promise((resolve) => bridge.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${bridge.port}/v1/responses`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'nvidia/test/model', input: 'hi' })
+  });
+  assert.equal(response.status, 404);
+  const payload = await response.json();
+  assert.equal(payload.error.code, 404);
+  assert.ok(payload.error.message.includes("'test/model'"));
+  assert.ok(payload.error.message.includes('pick another model'));
+});
+
+test('the fallback 404 identifies the bridge and available routes', async (context) => {
+  const bridge = await startBridge({ port: 0, upstreamBaseUrl: 'http://127.0.0.1:1/v1', apiKey: 'k', providerName: 'test', model: 'test/model' });
+  context.after(() => new Promise((resolve) => bridge.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${bridge.port}/nope`);
+  assert.equal(response.status, 404);
+  const payload = await response.json();
+  assert.ok(payload.error.message.includes('CodeSwitchboard bridge'));
+  assert.ok(payload.error.message.includes('/v1/responses'));
+});
+
+test('remaps models the routed provider does not know to the routed default', async (context) => {
+  let receivedModel = null;
+  const upstream = http.createServer(async (request, response) => {
+    let raw = '';
+    for await (const chunk of request) raw += chunk;
+    receivedModel = JSON.parse(raw).model;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' } }] }));
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => upstream.close(resolve)));
+
+  const bridge = await startBridge({ port: 0, upstreamBaseUrl: `http://127.0.0.1:${upstream.address().port}/v1`, apiKey: 'k', providerName: 'nvidia', model: 'routed/default', models: ['routed/default', 'routed/other'] });
+  context.after(() => new Promise((resolve) => bridge.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${bridge.port}/v1/responses`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'gpt-6-astra', input: 'hi' })
+  });
+  assert.equal(response.status, 200);
+  assert.equal(receivedModel, 'routed/default');
+});
+
+test('passes models through untouched when no routed default exists', async (context) => {
+  let receivedModel = null;
+  const upstream = http.createServer(async (request, response) => {
+    let raw = '';
+    for await (const chunk of request) raw += chunk;
+    receivedModel = JSON.parse(raw).model;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' } }] }));
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => upstream.close(resolve)));
+
+  const bridge = await startBridge({ port: 0, upstreamBaseUrl: `http://127.0.0.1:${upstream.address().port}/v1`, apiKey: 'k', providerName: 'test', models: ['test/only'] });
+  context.after(() => new Promise((resolve) => bridge.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${bridge.port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'anything/goes', messages: [{ role: 'user', content: 'hi' }] })
+  });
+  assert.equal(response.status, 200);
+  assert.equal(receivedModel, 'anything/goes');
+});
+
+test('retries a busy worker reported inside a 200 stream instead of failing the Codex session', async (context) => {
+  let upstreamRequests = 0;
+  const upstream = http.createServer((request, response) => {
+    upstreamRequests += 1;
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (upstreamRequests === 1) {
+      response.write(`data: ${JSON.stringify({ error: { code: 500, message: 'ResourceExhausted: Worker local total request limit reached (108/32)' } })}\n\n`);
+      response.end();
+      return;
+    }
+    response.write(`data: ${JSON.stringify({ id: 'x', choices: [{ index: 0, delta: { role: 'assistant', content: 'recovered' }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: 'x', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+    response.end('data: [DONE]\n\n');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => upstream.close(resolve)));
+
+  const bridge = await startBridge({ port: 0, upstreamBaseUrl: `http://127.0.0.1:${upstream.address().port}/v1`, apiKey: 'k', providerName: 'nvidia', model: 'test/model', attempts: 3, delayMs: 0 });
+  context.after(() => new Promise((resolve) => bridge.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${bridge.port}/v1/responses`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'test/model', input: 'hi' })
+  });
+  assert.equal(response.status, 200);
+  const events = parseSseEvents(await response.text());
+
+  // The busy-worker frame must never reach the CLI: it was retried upstream.
+  assert.equal(events.some((event) => event.type === 'response.failed'), false);
+  const completed = events.find((event) => event.type === 'response.completed');
+  assert.equal(completed.response.output[0].content[0].text, 'recovered');
+  assert.equal(upstreamRequests, 2);
+});
+
+test('reports a stream that dies mid-answer instead of closing silently', async (context) => {
+  const upstream = http.createServer((request, response) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write(`data: ${JSON.stringify({ id: 'x', choices: [{ index: 0, delta: { role: 'assistant', content: 'half an ans' }, finish_reason: null }] })}\n\n`);
+    response.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => upstream.close(resolve)));
+
+  const bridge = await startBridge({ port: 0, upstreamBaseUrl: `http://127.0.0.1:${upstream.address().port}/v1`, apiKey: 'k', providerName: 'test', model: 'test/model', attempts: 1, delayMs: 0 });
+  context.after(() => new Promise((resolve) => bridge.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${bridge.port}/v1/responses`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'test/model', input: 'hi' })
+  });
+  const events = parseSseEvents(await response.text());
+  const failed = events.find((event) => event.type === 'response.failed');
+  assert.ok(failed, 'the stream must end with an explained failure');
+  assert.match(failed.response.error.message, /stopped streaming before finishing/);
+});
+
+test('a busy requested port falls back to an available one', async (context) => {
+  const holder = http.createServer(() => {});
+  await new Promise((resolve) => holder.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => holder.close(resolve)));
+
+  const bridge = await startBridge({ port: holder.address().port, upstreamBaseUrl: 'http://127.0.0.1:1/v1', apiKey: 'k', providerName: 'test', model: 'test/model' });
+  context.after(() => new Promise((resolve) => bridge.close(resolve)));
+
+  assert.notEqual(bridge.port, holder.address().port);
+  const health = await fetch(`http://127.0.0.1:${bridge.port}/health`);
+  assert.equal(health.status, 200);
+});
+
 test('keeps output indices consistent when tool calls arrive before text', async (context) => {
   const upstream = http.createServer((request, response) => {
     const chunks = [

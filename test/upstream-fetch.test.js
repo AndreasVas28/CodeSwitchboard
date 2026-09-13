@@ -1,7 +1,15 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { fetchWithRetry, parseRetryAfter, RETRYABLE_STATUS } = require('../lib/upstream-fetch');
+const { fetchWithRetry, fetchStreamWithRetry, isRetryableStreamError, parseRetryAfter, RETRYABLE_STATUS } = require('../lib/upstream-fetch');
+
+function sse(...frames) {
+  return new Response(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
+const busyFrame = { error: { code: 500, message: 'ResourceExhausted: Worker local total request limit reached (108/32)' } };
+const contentFrame = { id: 'x', choices: [{ index: 0, delta: { role: 'assistant', content: 'recovered' }, finish_reason: null }] };
+const finishFrame = { id: 'x', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] };
 
 function json(init, status, body, headers = {}) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers }, ...init });
@@ -82,6 +90,139 @@ test('network errors are retried like rate limits', async () => {
     log: () => {}
   });
   assert.equal(requests, 2);
+});
+
+test('retries a bare gateway 404 a bounded number of times before passing it through', async () => {
+  let requests = 0;
+  const pauses = [];
+  const response = await fetchWithRetry('https://provider.test/v1/chat/completions', { method: 'POST' }, {
+    attempts: 8,
+    delayMs: 5000,
+    gateway404Attempts: 2,
+    fetchImpl: async () => {
+      requests += 1;
+      return new Response('404 page not found', { status: 404, headers: { 'content-type': 'text/plain' } });
+    },
+    sleep: async (ms) => pauses.push(ms),
+    log: () => {}
+  });
+  assert.equal(requests, 3);
+  assert.equal(response.status, 404);
+  assert.equal(await response.text(), '404 page not found');
+  assert.deepEqual(pauses, [5000, 5000]);
+});
+
+test('recovers when a gateway 404 clears on retry', async () => {
+  let requests = 0;
+  const response = await fetchWithRetry('https://provider.test/v1/chat/completions', { method: 'POST' }, {
+    attempts: 4,
+    delayMs: 5000,
+    gateway404Attempts: 3,
+    fetchImpl: async () => {
+      requests += 1;
+      if (requests === 1) return new Response('404 page not found', { status: 404 });
+      return json({}, 200, { ok: true });
+    },
+    sleep: async () => {},
+    log: () => {}
+  });
+  assert.equal(requests, 2);
+  assert.equal(response.status, 200);
+});
+
+test('does not retry a real 404 response body', async () => {
+  let requests = 0;
+  const response = await fetchWithRetry('https://provider.test/v1/chat/completions', { method: 'POST' }, {
+    attempts: 5,
+    delayMs: 1,
+    fetchImpl: async () => {
+      requests += 1;
+      return json({}, 404, { error: { message: 'unknown model' } });
+    },
+    sleep: async () => {},
+    log: () => {}
+  });
+  assert.equal(requests, 1);
+  assert.equal(response.status, 404);
+  assert.ok((await response.text()).includes('unknown model'));
+});
+
+test('includes the request target in retry logs', async () => {
+  const logged = [];
+  await fetchWithRetry('https://provider.test/v1/chat/completions', { method: 'POST' }, {
+    attempts: 2,
+    delayMs: 1,
+    fetchImpl: async () => json({}, 429, {}),
+    sleep: async () => {},
+    log: (info) => logged.push(info)
+  });
+  assert.equal(logged[0].target, '/v1/chat/completions');
+});
+
+test('retries a 200 stream whose first frame reports a busy worker', async () => {
+  let requests = 0;
+  const pauses = [];
+  const result = await fetchStreamWithRetry('https://provider.test/v1/chat/completions', { method: 'POST' }, {
+    attempts: 3,
+    delayMs: 5000,
+    fetchImpl: async () => {
+      requests += 1;
+      if (requests === 1) return sse(busyFrame);
+      return sse(contentFrame, finishFrame);
+    },
+    sleep: async (ms) => pauses.push(ms),
+    log: () => {}
+  });
+  assert.equal(requests, 2);
+  assert.deepEqual(pauses, [5000]);
+  assert.ok(result.head.toString().includes('recovered'));
+});
+
+test('hands a healthy stream to the caller on the first attempt', async () => {
+  let requests = 0;
+  const result = await fetchStreamWithRetry('https://provider.test/v1/chat/completions', { method: 'POST' }, {
+    attempts: 3,
+    delayMs: 5000,
+    fetchImpl: async () => { requests += 1; return sse(contentFrame, finishFrame); },
+    sleep: async () => {},
+    log: () => {}
+  });
+  assert.equal(requests, 1);
+  assert.ok(result.head.toString().includes('recovered'));
+});
+
+test('does not resend a stream that fails after content already arrived', async () => {
+  let requests = 0;
+  const result = await fetchStreamWithRetry('https://provider.test/v1/chat/completions', { method: 'POST' }, {
+    attempts: 3,
+    delayMs: 1,
+    fetchImpl: async () => {
+      requests += 1;
+      return sse(contentFrame, { error: { code: 500, message: 'ResourceExhausted' } });
+    },
+    sleep: async () => {},
+    log: () => {}
+  });
+  assert.equal(requests, 1);
+  assert.ok(result.head.toString().includes('recovered'));
+});
+
+test('does not resend a malformed-request error delivered inside the stream', async () => {
+  let requests = 0;
+  await fetchStreamWithRetry('https://provider.test/v1/chat/completions', { method: 'POST' }, {
+    attempts: 3,
+    delayMs: 1,
+    fetchImpl: async () => { requests += 1; return sse({ error: { code: 400, message: 'Invalid tool schema' } }); },
+    sleep: async () => {},
+    log: () => {}
+  });
+  assert.equal(requests, 1);
+});
+
+test('classifies stream errors as retryable only when the provider is busy', () => {
+  assert.equal(isRetryableStreamError(busyFrame.error), true);
+  assert.equal(isRetryableStreamError({ code: 503 }), true);
+  assert.equal(isRetryableStreamError({ code: 400, message: 'Invalid request' }), false);
 });
 
 test('retryable status set covers the codes providers use for rate limits', () => {

@@ -16,6 +16,11 @@ const PROVIDERS = {
   together: { url: 'https://api.together.xyz/v1', env: 'TOGETHER_API_KEY' }
 };
 
+// A fixed default keeps ~/.codex/config.toml pointing at a live port across
+// restarts; the launcher falls back to an ephemeral port only when 4280 is
+// taken (e.g. a previous bridge that outlived its dashboard).
+const DEFAULT_BRIDGE_PORT = 4280;
+
 const RETIRED_MODEL_REPLACEMENTS = {
   nvidia: {
     'qwen/qwen3-coder-480b-a35b-instruct': 'poolside/laguna-xs-2.1'
@@ -34,7 +39,7 @@ Options:
   --api-key KEY       API key (prefer the provider environment variable)
   --base-url URL      Required for custom; overrides a preset
   --workspace PATH    Folder to open (default: current folder)
-  --port NUMBER       Local bridge port (default: an available port)
+  --port NUMBER       Local bridge port (default: 4280, falls back to an available port)
   --keep-app-running  Reconfigure an already-running Codex app without stopping it
   --handoff-url URL   Internal one-time localhost launch handoff
   --dry-run           Validate and print the launch configuration only
@@ -238,12 +243,14 @@ async function bridgeDaemonMain() {
     upstreamBaseUrl: args['base-url'],
     apiKey,
     providerName: args.provider || 'custom',
+    model: args.model,
     models
   });
   fs.writeFileSync(stateFile, JSON.stringify({
     pid: process.pid,
     port: bridge.port,
     providerName: args.provider || 'custom',
+    model: args.model,
     startedAt: new Date().toISOString()
   }));
   const stop = () => bridge.close(() => {
@@ -257,7 +264,7 @@ async function bridgeDaemonMain() {
   process.on('SIGTERM', stop);
 }
 
-async function startBridgeDaemon({ port, upstreamBaseUrl, apiKey, providerName, models = [] }) {
+async function startBridgeDaemon({ port, upstreamBaseUrl, apiKey, providerName, model, models = [] }) {
   const paths = codexConfigPaths();
   if (fs.existsSync(paths.lock)) {
     let existingPid;
@@ -274,6 +281,7 @@ async function startBridgeDaemon({ port, upstreamBaseUrl, apiKey, providerName, 
     '--base-url', upstreamBaseUrl,
     '--port', String(port || 0),
     '--state-file', paths.lock,
+    ...(model ? ['--model', model] : []),
     ...(models.length ? ['--models', models.join(',')] : [])
   ], {
     detached: true,
@@ -488,7 +496,7 @@ async function main() {
     // starting the replacement daemon. Doing this after daemon startup would make
     // restoreStaleConfig mistake the new daemon for the owner of the stale overlay.
     restoreStaleConfig(codexConfigPaths());
-    const daemon = await startBridgeDaemon({ port: args.port ? Number(args.port) : 0, upstreamBaseUrl: baseUrl, apiKey, providerName, models: bridgeModels });
+    const daemon = await startBridgeDaemon({ port: args.port ? Number(args.port) : DEFAULT_BRIDGE_PORT, upstreamBaseUrl: baseUrl, apiKey, providerName, model, models: bridgeModels });
     const localBaseUrl = `http://127.0.0.1:${daemon.port}/v1`;
     console.log(`Bridge: ${localBaseUrl} -> ${baseUrl}`);
     console.log(`Launching real Codex app with model: ${model}`);
@@ -510,7 +518,7 @@ async function main() {
       throw error;
     }
   } else {
-    const bridge = await startBridge({ port: args.port ? Number(args.port) : 0, upstreamBaseUrl: baseUrl, apiKey, providerName, models: bridgeModels });
+    const bridge = await startBridge({ port: args.port ? Number(args.port) : DEFAULT_BRIDGE_PORT, upstreamBaseUrl: baseUrl, apiKey, providerName, model, models: bridgeModels });
     const localBaseUrl = `http://127.0.0.1:${bridge.port}/v1`;
     console.log(`Bridge: ${localBaseUrl} -> ${baseUrl}`);
     console.log(`Launching Codex with model: ${model}`);

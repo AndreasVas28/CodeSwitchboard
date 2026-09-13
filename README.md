@@ -53,6 +53,31 @@ CodeSwitchboard is a local control panel for launching coding apps and terminal 
 
 It runs only on `127.0.0.1`. API keys pasted into the dashboard are encrypted with Windows DPAPI for the current user before being persisted; plaintext keys are held only in the server process, are never returned by the API, and are not passed to routed child tools.
 
+## Providers
+
+The dashboard and `csb providers` include NVIDIA NIM, OpenRouter, Groq,
+Together AI, Fireworks AI, DeepInfra, Cerebras, SambaNova, and these presets:
+
+| Provider | CLI ID | Environment variable | Official API documentation |
+| --- | --- | --- | --- |
+| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` | [API](https://api-docs.deepseek.com/) |
+| Mistral AI | `mistral` | `MISTRAL_API_KEY` | [API](https://docs.mistral.ai/api) |
+| xAI (Grok) | `xai` | `XAI_API_KEY` | [API](https://docs.x.ai/overview) |
+| Moonshot AI (Kimi, international) | `moonshot` | `MOONSHOT_API_KEY` | [Compatibility](https://platform.moonshot.ai/docs/guide/migrating-from-openai-to-kimi) |
+| SiliconFlow (international) | `siliconflow` | `SILICONFLOW_API_KEY` | [API](https://docs.siliconflow.com/en/api-reference/models/get-model-list) |
+
+Save the matching provider's API key in the dashboard or with `csb key set mistral`,
+then use `csb models mistral` to load its current catalog. Select a returned model
+with `csb select model <model-id>` and save the provider with `csb select provider mistral`.
+Keys and selections use the same persistent storage as existing providers.
+Use Custom endpoint for regional accounts or another OpenAI-compatible service.
+
+These presets use live model discovery and the existing chat-completions gateway.
+An available model is not necessarily suitable for a coding agent: choose a chat
+model with tool support. Automated tests use local fixtures; live inference still
+requires a valid provider key and a compatible model. Restart the dashboard after
+updating to load new presets.
+
 ## Start the dashboard
 
 ```powershell

@@ -39,12 +39,21 @@ The table records historical local-mock results, not universal compatibility. Ex
 - Qwen Code: npm package `@qwen-code/qwen-code`.
 - Kilo Code CLI: npm package `@kilocode/cli`.
 
+## Upstream reliability
+
+Every provider-facing call goes through `lib/upstream-fetch.js`, which retries instead of handing the CLI its first failure. Two retry layers exist because providers report trouble in two different shapes:
+
+- **Status-level (`fetchWithRetry`)** — transient statuses (408, 425, 429, 500, 502, 503, 504, 529) and network drops are retried every 5 s for up to 12 attempts, honoring a shorter `Retry-After`. NVIDIA's gateway also answers a bare `404 page not found` for a model it does not know; that body is retried a bounded 3 times, then surfaced as an error naming the model.
+- **Stream-level (`fetchStreamWithRetry`)** — NVIDIA answers HTTP 200 and `text/event-stream` and *then* puts the failure in the stream: `{"error":{"message":"ResourceExhausted: Worker local total request limit reached (108/32)"}}` as the first SSE frame. A status-code retry never sees that, so the CLI received a half-open stream and Codex printed `stream disconnected before completion: response.failed event received`. The bridge now peeks the head of the upstream stream and resends whenever the provider reports a busy worker (or closes early) before producing any content, so a retry can never duplicate output. Errors that arrive after content are not resent; they are reported through an explicit `response.failed` event that names the cause instead of silently closing the stream.
+
+Knobs: `CODESWITCHBOARD_RETRY_ATTEMPTS` (default 12), `CODESWITCHBOARD_RETRY_DELAY_MS` (default 5000), `CODESWITCHBOARD_GATEWAY_404_ATTEMPTS` (default 3), `CODESWITCHBOARD_STREAM_PEEK_BYTES` (default 65536). Raise the attempt count when a shared provider pool stays saturated for longer than a minute.
+
 ## Known limitations and safety notes
 
 - Cline's interactive `/model` picker is affected by an upstream Cline CLI bug: its bundled Ink (React-for-terminals) runtime aborts with `Error: Text must be created inside of a text node` while rendering the picker. `scripts/repro-cline-model.js` reproduces it against a deterministic localhost mock (Cline 3.0.61, latest at the time of testing), and no request to the model endpoint precedes the crash, so CodeSwitchboard's bridge shape is not implicated. Model selection still works at launch (`--model`), via `cline auth`, and by editing the isolated `providers.json` that CodeSwitchboard writes per launch; the picker itself must be fixed upstream.
 
-- No live provider test was run. Do not infer NVIDIA quota or model availability from the mock pass.
-- No live Codex inference test was run.
+- Live NVIDIA inference is verified through the bridge on both routes: `/v1/responses` (Codex) returns a streamed completion and `/v1/chat/completions` (Aider and other OpenAI-compatible clients) streams deltas. A saturated worker pool (`ResourceExhausted: Worker local total request limit reached`) was observed live and absorbed by the stream-level retry — a request that previously failed instantly completed after 35 s of 5-second retries.
+- NVIDIA's worker-pool saturation is a shared-pool condition and can outlast the default retry window (~1 minute); raise `CODESWITCHBOARD_RETRY_ATTEMPTS` for longer patience rather than expecting the bridge to succeed, and note the pool counter applies across clients, not just CodeSwitchboard.
 - Claude Desktop uses an explicit managed `inferenceModels` registry list with model discovery disabled because Claude Desktop auto-discovery can hide opaque non-Claude IDs. Restore removes only CodeSwitchboard-owned policy values.
 - Provider keys remain inside the CodeSwitchboard process or encrypted DPAPI storage; child tools receive only `codeswitchboard-local` for routed local bridges.
 - Installation endpoints now execute asynchronously so a long WinGet/npm installation does not block the dashboard event loop. Installers remain explicit user actions.

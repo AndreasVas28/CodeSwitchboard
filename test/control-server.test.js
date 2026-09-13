@@ -25,6 +25,60 @@ function testStore() {
   };
 }
 
+test('additional providers survive server recreation and discover and route models', async (context) => {
+  const ids = ['deepseek', 'mistral', 'xai', 'moonshot', 'siliconflow'];
+  const store = testStore();
+  const received = [];
+  const upstream = http.createServer(async (request, response) => {
+    const [, providerId, route] = request.url.split('/');
+    assert.ok(ids.includes(providerId));
+    assert.equal(request.headers.authorization, `Bearer fixture-${providerId}`);
+    response.setHeader('content-type', 'application/json');
+    if (route === 'models') {
+      response.end(JSON.stringify({ data: [{ id: 'vendor/code-model' }] }));
+      return;
+    }
+    assert.equal(request.url, `/${providerId}/chat/completions`);
+    let raw = '';
+    for await (const chunk of request) raw += chunk;
+    const body = JSON.parse(raw);
+    assert.equal(body.model, 'vendor/code-model');
+    received.push(providerId);
+    response.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'OK' } }] }));
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => upstream.close(resolve)));
+  for (const id of ids) store.setProviderOverride(id, { baseUrl: `http://127.0.0.1:${upstream.address().port}/${id}` });
+  const options = { persistentStore: store, launcher: { close() {} }, targetDetector: () => [], catalogDetector: () => [] };
+  let control = createControlServer(options);
+  let address = await control.listen(0);
+  for (const id of ids) {
+    const result = await fetch(`http://127.0.0.1:${address.port}/api/providers/${id}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ apiKey: `fixture-${id}` })
+    });
+    assert.equal(result.status, 200);
+  }
+  await control.close();
+  control = createControlServer(options);
+  address = await control.listen(0);
+  context.after(() => control.close());
+  const root = `http://127.0.0.1:${address.port}`;
+  const state = await (await fetch(`${root}/api/state`)).json();
+  assert.ok(!JSON.stringify(state).includes('fixture-'));
+  for (const id of ids) {
+    assert.equal(state.providers.find((provider) => provider.id === id).keyConfigured, true);
+    const catalog = await (await fetch(`${root}/api/providers/${id}/models`)).json();
+    assert.deepEqual(catalog.models, ['vendor/code-model']);
+    const reply = await fetch(`${root}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer codeswitchboard-local' },
+      body: JSON.stringify({ model: `${id}/vendor/code-model`, messages: [{ role: 'user', content: 'Hi' }] })
+    });
+    assert.equal(reply.status, 200);
+    assert.equal((await reply.json()).choices[0].message.content, 'OK');
+  }
+  assert.deepEqual(received, ids);
+});
+
 test('control server serves the dashboard and never returns provider keys', async (context) => {
   const launches = [];
   const launcher = {
