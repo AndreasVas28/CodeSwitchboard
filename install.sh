@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
 # CodeSwitchboard installer for macOS and Linux.
 #
-# Run from any terminal:
+# Public repo, from any terminal:
 #   curl -fsSL https://raw.githubusercontent.com/AndreasVas28/CodeSwitchboard/HEAD/install.sh | bash
 #
-# Or inspect first, then run:
-#   curl -fsSL ... -o install.sh && less install.sh && bash install.sh
+# Private repo (uses your saved git credentials):
+#   git clone https://github.com/AndreasVas28/CodeSwitchboard.git ~/CodeSwitchboard
+#   bash ~/CodeSwitchboard/install.sh
+#
+# Running the script from inside an existing checkout skips the clone step.
 
 set -euo pipefail
 
 repo_url='https://github.com/AndreasVas28/CodeSwitchboard.git'
-install_dir="$HOME/CodeSwitchboard"
+install_dir="${CODESWITCHBOARD_INSTALL_DIR:-$HOME/CodeSwitchboard}"
+
+# If this script file lives inside a real checkout, operate on that checkout.
+script_self_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd)"
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ "$script_self_dir" != "$PWD" ] \
+   && [ -f "$script_self_dir/package.json" ] && [ -f "$script_self_dir/install.sh" ] \
+   && [ -d "$script_self_dir/.git" ]; then
+  install_dir="$script_self_dir"
+fi
 
 say() { printf '\033[36m==>\033[0m %s\n' "$1"; }
 fail() { printf '\033[31merror:\033[0m %s\n' "$1" >&2; exit 1; }
@@ -49,7 +60,14 @@ if ! have node || [ "$(node_major)" -lt 20 ]; then
 fi
 
 # --- 2. Clone or update the repository --------------------------------------
-if [ -d "$install_dir/.git" ]; then
+running_inside_checkout=false
+if [ "$install_dir" = "$script_self_dir" ] && [ -d "$install_dir/.git" ]; then running_inside_checkout=true; fi
+if [ -f "$install_dir/package.json" ] && [ ! -d "$install_dir/.git" ] && ! $running_inside_checkout; then
+  fail "The target directory $install_dir exists but is not a CodeSwitchboard checkout. Remove it or set CODESWITCHBOARD_INSTALL_DIR."
+fi
+if $running_inside_checkout; then
+  say "Using the current checkout at $install_dir"
+elif [ -d "$install_dir/.git" ]; then
   say "Updating existing checkout at $install_dir"
   git -C "$install_dir" pull --ff-only
 else

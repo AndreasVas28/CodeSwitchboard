@@ -1,12 +1,27 @@
 # CodeSwitchboard installer for Windows.
 #
-# Run from any PowerShell window:
+# Public repo, from any PowerShell window:
 #   irm https://raw.githubusercontent.com/AndreasVas28/CodeSwitchboard/HEAD/install.ps1 | iex
+#
+# Private repo (uses your saved git credentials):
+#   git clone https://github.com/AndreasVas28/CodeSwitchboard.git "$env:USERPROFILE\CodeSwitchboard"
+#   powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\CodeSwitchboard\install.ps1"
+#
+# Running the script from inside an existing checkout skips the clone step.
+
+param(
+  [string]$InstallDir = (Join-Path $env:USERPROFILE 'CodeSwitchboard')
+)
 
 $ErrorActionPreference = 'Stop'
 
-$repoUrl    = 'https://github.com/AndreasVas28/CodeSwitchboard.git'
-$installDir = Join-Path $env:USERPROFILE 'CodeSwitchboard'
+$repoUrl = 'https://github.com/AndreasVas28/CodeSwitchboard.git'
+
+# If this script file lives inside a checkout, operate on that checkout.
+if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'package.json')) -and (Test-Path (Join-Path $PSScriptRoot 'install.ps1'))) {
+  $InstallDir = $PSScriptRoot
+}
+$installDir = $InstallDir
 
 function Test-Command($name) {
   return [bool](Get-Command $name -ErrorAction SilentlyContinue)
@@ -52,7 +67,13 @@ if ($nodeMajor -lt 20) {
 }
 
 # --- 2. Clone or update the repository -------------------------------------
-if (Test-Path (Join-Path $installDir '.git')) {
+$runningInsideCheckout = ($installDir -eq $PSScriptRoot)
+if (-not $runningInsideCheckout -and -not (Test-Path (Join-Path $installDir 'package.json')) -and (Test-Path $installDir)) {
+  throw "The target directory $installDir already exists but is not a CodeSwitchboard checkout. Remove it or pass -InstallDir."
+}
+if ($runningInsideCheckout) {
+  Write-Host "==> Using the current checkout at $installDir" -ForegroundColor Cyan
+} elseif (Test-Path (Join-Path $installDir '.git')) {
   Write-Host "==> Updating existing checkout at $installDir" -ForegroundColor Cyan
   git -C $installDir pull --ff-only
   if ($LASTEXITCODE -ne 0) { throw 'git pull failed. Resolve the checkout state and run the installer again.' }
