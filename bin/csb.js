@@ -124,8 +124,14 @@ async function main(argv = process.argv.slice(2)) {
   await ensureServer();
 
   if (command === 'open') {
-    const child = spawn('powershell.exe', ['-NoProfile', '-Command', `Start-Process '${ROOT}'`], { detached: true, stdio: 'ignore', windowsHide: true });
-    child.unref();
+    if (process.platform === 'win32') {
+      const child = spawn('powershell.exe', ['-NoProfile', '-Command', `Start-Process '${ROOT}'`], { detached: true, stdio: 'ignore', windowsHide: true });
+      child.unref();
+    } else {
+      const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
+      const child = spawn(opener, [ROOT], { detached: true, stdio: 'ignore' });
+      child.unref();
+    }
     console.log(`Opened ${ROOT}`);
     return;
   }

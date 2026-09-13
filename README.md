@@ -1,13 +1,44 @@
 # CodeSwitchboard
 
-A Windows-first local launcher for AI coding apps and CLIs. Choose a provider,
-model, and workspace in your browser or PowerShell, then launch an installed tool.
-This is an independent experimental project. Compatibility depends on the target,
-provider, model capabilities, and installed versions; see [target status](docs/TARGET_STATUS.md).
+A local launcher for AI coding apps and CLIs on Windows, macOS, and Linux.
+Choose a provider, model, and workspace in your browser or with the `csb` CLI,
+then launch an installed tool. This is an independent experimental project.
+Compatibility depends on the target, provider, model capabilities, and installed
+versions; see [target status](docs/TARGET_STATUS.md).
 
-## Install from GitHub
+## Install (one line)
 
-Install Node.js 20 or newer and Git, then run in PowerShell:
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/AndreasVas28/CodeSwitchboard/HEAD/install.ps1 | iex
+```
+
+macOS or Linux terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AndreasVas28/CodeSwitchboard/HEAD/install.sh | bash
+```
+
+The installer installs Git and Node.js 20+ if they are missing (via `winget` on
+Windows, `brew`/`apt`/`dnf`/`pacman` on macOS and Linux), clones or updates the
+repository to `~/CodeSwitchboard`, runs `npm ci`, and links the `csb` command.
+
+Review before running if you prefer:
+
+```powershell
+irm https://raw.githubusercontent.com/AndreasVas28/CodeSwitchboard/HEAD/install.ps1 -OutFile install.ps1; notepad install.ps1
+```
+
+If `csb` is not found after installing, open a new terminal. To verify it:
+
+```powershell
+csb info
+```
+
+## Install from GitHub (manual)
+
+Install Node.js 20 or newer and Git, then run:
 
 ```powershell
 git clone https://github.com/AndreasVas28/CodeSwitchboard.git
@@ -17,16 +48,16 @@ npm link
 csb open
 ```
 
-If `csb` is not found, reopen PowerShell or run `node bin/csb.js open` from
+If `csb` is not found, reopen your terminal or run `node bin/csb.js open` from
 this directory. If native dependency installation requires compilation, install
-the Windows C++ build tools and Python requested by node-gyp. Target applications
+the C++ build tools and Python requested by node-gyp. Target applications
 are installed separately. Use `csb catalog`, `csb target info <id>`, and
 `csb install <id>` to inspect and install supported packages.
 
-This repository distributes source code; it has no signed Windows installer
+This repository distributes source code; it has no signed installer
 or published npm package. Provider usage may require credits or a paid API plan.
 
-## PowerShell command
+## Command line
 
 Use `csb` from any directory:
 
@@ -47,11 +78,13 @@ You can also launch in one command:
 csb launch claude-app --provider nvidia --model poolside/laguna-xs-2.1 --workspace C:\path\to\project
 ```
 
-Run `csb providers`, `csb models nvidia`, and `csb targets` to discover IDs. Use `csb restore claude` or `csb restore codex` to return an app to its normal account. Provider keys are encrypted with Windows DPAPI for the current Windows user and saved with selections under `%LOCALAPPDATA%\CodeSwitchboard\config.json`; plaintext keys are never written to that file.
+Run `csb providers`, `csb models nvidia`, and `csb targets` to discover IDs. Use `csb restore claude` or `csb restore codex` to return an app to its normal account. Keys and selections are stored locally: on Windows they are encrypted with DPAPI for the current user; on macOS and Linux the store file is protected with owner-only file permissions.
+
+Settings live at `%LOCALAPPDATA%\CodeSwitchboard\config.json` on Windows and `~/.local/state/codeswitchboard/config.json` on macOS and Linux.
 
 CodeSwitchboard is a local control panel for launching coding apps and terminal agents with the right model provider, account mode, and workspace.
 
-It runs only on `127.0.0.1`. API keys pasted into the dashboard are encrypted with Windows DPAPI for the current user before being persisted; plaintext keys are held only in the server process, are never returned by the API, and are not passed to routed child tools.
+It runs only on `127.0.0.1`. API keys pasted into the dashboard are encrypted with Windows DPAPI on Windows (or saved with owner-only file permissions on macOS and Linux) before being persisted; plaintext keys are held only in the server process, are never returned by the API, and are not passed to routed child tools.
 
 ## Providers
 
@@ -81,15 +114,13 @@ updating to load new presets.
 ## Start the dashboard
 
 ```powershell
-npm install
-npm link
-codeswitchboard-server
+csb open
 ```
 
-The command opens [http://127.0.0.1:4242](http://127.0.0.1:4242). You can use another port or prevent the browser from opening:
+That starts the server and opens [http://127.0.0.1:4242](http://127.0.0.1:4242). You can run the server in the foreground, use another port, or prevent the browser from opening:
 
 ```powershell
-codeswitchboard-server --port 5050 --no-open
+csb server --port 5050 --no-open
 ```
 
 Then:
@@ -99,11 +130,16 @@ Then:
 3. Choose a workspace and an installed app or CLI.
 4. Launch it.
 
-Provider environment variables are also supported. For example:
+Provider environment variables are also supported:
 
 ```powershell
 $env:NVIDIA_API_KEY = "nvapi-your-key"
-codeswitchboard-server
+csb server
+```
+
+```bash
+export NVIDIA_API_KEY="nvapi-your-key"
+csb server
 ```
 
 ## Launch targets
@@ -151,23 +187,13 @@ Targets live in `lib/target-registry.js`, so more apps and CLIs can be added wit
 
 ## Restore normal Codex account mode
 
-Use **Restore Codex account mode** in the dashboard, or keep using the backwards-compatible command:
+Use **Restore Codex account mode** in the dashboard, or run:
 
 ```powershell
-free-codex launch codex-app --restore
+csb restore codex
 ```
 
 This stops the managed bridge, restores the original Codex configuration, changes the most recently routed task back to the built-in OpenAI provider, and reopens it with the saved real account. Existing backups remain under `~/.codex/free-codex-backups` for compatibility with earlier versions.
-
-## Legacy command
-
-The original command remains available, so existing scripts continue working:
-
-```powershell
-free-codex launch codex-app --provider nvidia --model provider/model-id
-```
-
-For NVIDIA, `--model` remains optional and the live model catalog is added to the Codex model menu.
 
 ## Requirements
 
@@ -198,7 +224,7 @@ The dashboard also shows **Send test message** for each routed non-Codex CLI. Th
 - Restore desktop account settings with `csb restore claude` or `csb restore codex` before removing CodeSwitchboard. These commands may restart the relevant app.
 - `csb stop` stops the dashboard and its managed bridges. The separately launched Codex Desktop bridge has its own restore command.
 
-Settings are stored at `%LOCALAPPDATA%\CodeSwitchboard\config.json`. Use
+Settings are stored at `%LOCALAPPDATA%\CodeSwitchboard\config.json` (Windows) or `~/.local/state/codeswitchboard/config.json` (macOS and Linux). Use
 `csb key remove <provider>` to remove a saved key. To update a clean checkout,
 run `git pull --ff-only` and `npm ci`, then restart the dashboard.
 

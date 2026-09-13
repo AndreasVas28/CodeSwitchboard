@@ -8,14 +8,10 @@
   "homepage": "https://github.com/AndreasVas28/CodeSwitchboard#readme",
   "description": "Local provider switchboard for coding apps and CLIs",
   "bin": {
-    "csb": "bin/csb.js",
-    "codeswitchboard": "bin/codeswitchboard-server.js",
-    "codeswitchboard-server": "bin/codeswitchboard-server.js",
-    "free-codex": "bin/free-codex.js"
+    "csb": "bin/csb.js"
   },
   "scripts": {
-    "start": "node bin/codeswitchboard-server.js",
-    "legacy:codex": "node bin/free-codex.js",
+    "start": "node bin/csb.js server",
     "test": "node --test test/*.test.js",
     "link-cli": "npm link"
   },
