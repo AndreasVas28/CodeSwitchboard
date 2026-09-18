@@ -132,14 +132,20 @@ async function stopServer() {
   return true;
 }
 
-function npmCommand() { return process.platform === 'win32' ? 'npm.cmd' : 'npm'; }
+function runNpm(npmArgs) {
+  // Node >= 24 refuses to spawn .cmd shims without a shell (EINVAL), so npm
+  // must go through the shell on Windows; other platforms spawn directly.
+  return spawnSync('npm', npmArgs, { encoding: 'utf8', shell: process.platform === 'win32' });
+}
 
 function removeGlobalCommand() {
-  const result = spawnSync(npmCommand(), ['uninstall', '-g', 'codeswitchboard'], { encoding: 'utf8', shell: false });
-  if (result.status !== 0) console.log(`npm uninstall -g codeswitchboard failed (${(result.stderr || result.stdout || '').trim().split('\n')[0]}); removing the command files directly.`);
-  const prefixResult = spawnSync(npmCommand(), ['prefix', '-g'], { encoding: 'utf8', shell: false });
-  if (prefixResult.status !== 0 || !prefixResult.stdout) return;
-  const prefix = prefixResult.stdout.trim();
+  const result = runNpm(['uninstall', '-g', 'codeswitchboard']);
+  if (result.error) console.log(`npm uninstall -g codeswitchboard could not run (${result.error.code || result.error.message}); removing the command files directly.`);
+  else if (result.status !== 0) console.log(`npm uninstall -g codeswitchboard failed (${(result.stderr || result.stdout || '').trim().split('\n')[0]}); removing the command files directly.`);
+  const prefixResult = runNpm(['prefix', '-g']);
+  let prefix = prefixResult.status === 0 && prefixResult.stdout ? prefixResult.stdout.trim() : null;
+  if (!prefix && process.platform === 'win32' && process.env.APPDATA) prefix = path.join(process.env.APPDATA, 'npm');
+  if (!prefix) { console.log('Could not locate the global npm prefix; command shims may be left behind.'); return; }
   const binDir = process.platform === 'win32' ? prefix : path.join(prefix, 'bin');
   const modulesDir = path.join(prefix, 'node_modules', 'codeswitchboard');
   const owned = ['csb', 'codeswitchboard', 'codeswitchboard-server', 'free-codex'];
@@ -222,7 +228,7 @@ async function main(argv = process.argv.slice(2)) {
     if (await stopServer()) console.log('CodeSwitchboard stopped.');
     removeGlobalCommand();
     if (purge) purgeSavedState();
-    else console.log(`Saved settings were kept. Delete them later with: csb uninstall --purge --yes${serverWasRunning ? '' : ''}`);
+    else console.log('Saved settings were kept. Delete them later with: csb uninstall --purge --yes');
     console.log('CodeSwitchboard uninstalled. You can delete this repository folder whenever you like.');
     return;
   }

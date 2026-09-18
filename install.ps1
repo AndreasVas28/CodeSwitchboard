@@ -8,12 +8,16 @@
 #   powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\CodeSwitchboard\install.ps1"
 #
 # Running the script from inside an existing checkout skips the clone step.
+# If winget is unavailable (Windows Sandbox, stripped-down systems), the
+# official Git and Node.js installers are downloaded and run silently instead.
 
 param(
   [string]$InstallDir = (Join-Path $env:USERPROFILE 'CodeSwitchboard')
 )
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol } catch { }
 
 $repoUrl = 'https://github.com/AndreasVas28/CodeSwitchboard.git'
 
@@ -27,42 +31,91 @@ function Test-Command($name) {
   return [bool](Get-Command $name -ErrorAction SilentlyContinue)
 }
 
+function Get-WingetCommand {
+  if (Test-Command 'winget') { return 'winget' }
+  # Some elevated or restricted sessions lack the WindowsApps alias on PATH.
+  $direct = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
+  if (Test-Path $direct) { return $direct }
+  return $null
+}
+
 function Update-SessionPath {
   $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
               [Environment]::GetEnvironmentVariable('Path', 'User')
+  # Cover installers whose PATH edit is not visible to this session yet.
+  foreach ($dir in @("$env:ProgramFiles\Git\cmd", "${env:ProgramFiles(x86)}\Git\cmd", "$env:ProgramFiles\nodejs")) {
+    if ($dir -and (Test-Path $dir) -and (($env:Path -split ';') -notcontains $dir)) { $env:Path = "$env:Path;$dir" }
+  }
 }
 
 function Get-NodeMajor {
   try { return [int]((node --version) -replace '^v', '' -replace '\..*$', '') } catch { return 0 }
 }
 
+function Invoke-InstallerDownload($url, $outFile) {
+  Write-Host "==> Downloading $url" -ForegroundColor Cyan
+  Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing
+}
+
+function Get-LatestNodeLtsMsiUrl {
+  $releases = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -UseBasicParsing
+  $lts = @($releases | Where-Object { $_.lts })[0]
+  if (-not $lts) { throw 'Could not determine the latest Node.js LTS version.' }
+  # version already includes the leading "v" (e.g. "v24.21.0").
+  return "https://nodejs.org/dist/$($lts.version)/node-$($lts.version)-x64.msi"
+}
+
+function Get-LatestGitInstallerUrl {
+  # Assets are version-named (Git-2.x.y-64-bit.exe), so resolve via the API.
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest' -UseBasicParsing
+  $asset = @($release.assets | Where-Object { $_.name -match '^Git-[\d.]+-64-bit\.exe$' })[0]
+  if (-not $asset) { throw 'Could not find the latest Git for Windows installer asset.' }
+  return $asset.browser_download_url
+}
+
+function Install-GitWithoutWinget {
+  Write-Host '==> winget unavailable; installing Git from the official installer...' -ForegroundColor Yellow
+  $installer = Join-Path $env:TEMP 'CodeSwitchboard-Git-installer.exe'
+  Invoke-InstallerDownload (Get-LatestGitInstallerUrl) $installer
+  $process = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/NORESTART', '/SUPPRESSMSGBOXES', '/NOCANCEL', '/SP-' -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "The Git installer exited with code $($process.ExitCode)." }
+}
+
+function Install-NodeWithoutWinget {
+  Write-Host '==> winget unavailable; installing Node.js LTS from the official installer...' -ForegroundColor Yellow
+  $msi = Join-Path $env:TEMP 'CodeSwitchboard-Node-LTS.msi'
+  Invoke-InstallerDownload (Get-LatestNodeLtsMsiUrl) $msi
+  $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "The Node.js installer exited with code $($process.ExitCode)." }
+}
+
 Write-Host '==> CodeSwitchboard installer' -ForegroundColor Cyan
 
 # --- 1. Prerequisites -------------------------------------------------------
-if (-not (Test-Command 'git')) {
-  Write-Host '==> Git not found. Installing with winget...' -ForegroundColor Yellow
-  if (Test-Command 'winget') {
-    winget install --id Git.Git -e --source winget --accept-source-agreements --accept-package-agreements
-    Update-SessionPath
-  } else {
-    throw 'Git is required. Install it from https://git-scm.com/download/win and run the installer again.'
-  }
   if (-not (Test-Command 'git')) {
-    throw 'Git was installed but is not on PATH yet. Open a new PowerShell window and run the installer again.'
+  Write-Host '==> Git not found. Installing...' -ForegroundColor Yellow
+  $winget = Get-WingetCommand
+  if ($winget) {
+    & $winget install --id Git.Git -e --source winget --accept-source-agreements --accept-package-agreements
+    Update-SessionPath
+  }
+  if (-not (Test-Command 'git')) { Install-GitWithoutWinget; Update-SessionPath }
+  if (-not (Test-Command 'git')) {
+    throw 'Git installation did not complete. Install it from https://git-scm.com/download/win and run the installer again.'
   }
 }
 
 $nodeMajor = Get-NodeMajor
 if ($nodeMajor -lt 20) {
-  Write-Host "==> Node.js 20+ not found (found: $(if ($nodeMajor) { $nodeMajor } else { 'none' })). Installing LTS with winget..." -ForegroundColor Yellow
-  if (Test-Command 'winget') {
-    winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-source-agreements --accept-package-agreements
+  Write-Host "==> Node.js 20+ not found (found: $(if ($nodeMajor) { $nodeMajor } else { 'none' })). Installing LTS..." -ForegroundColor Yellow
+  $winget = Get-WingetCommand
+  if ($winget) {
+    & $winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-source-agreements --accept-package-agreements
     Update-SessionPath
-  } else {
-    throw 'Node.js 20 or newer is required. Install it from https://nodejs.org and run the installer again.'
   }
+  if ((Get-NodeMajor) -lt 20) { Install-NodeWithoutWinget; Update-SessionPath }
   if ((Get-NodeMajor) -lt 20) {
-    throw 'Node.js 20+ is still unavailable. Open a new PowerShell window and run the installer again.'
+    throw 'Node.js 20+ is still unavailable. Install it from https://nodejs.org and run the installer again.'
   }
 }
 
