@@ -161,6 +161,17 @@ try {
   if ($LASTEXITCODE -ne 0) {
     Write-Host 'npm link failed. You can still start CodeSwitchboard with: node bin\csb.js open' -ForegroundColor Yellow
   }
+
+  # PowerShell prefers csb.ps1 over csb.cmd, and the default Restricted
+  # execution policy blocks every .ps1. Removing the .ps1 shim makes the
+  # bare `csb` command resolve to csb.cmd, which any policy allows.
+  $globalPrefix = (& $npmCmd prefix -g 2>$null | Select-Object -First 1)
+  if (-not $globalPrefix) { $globalPrefix = Join-Path $env:APPDATA 'npm' }
+  $ps1Shim = Join-Path $globalPrefix 'csb.ps1'
+  if (Test-Path $ps1Shim) {
+    Remove-Item $ps1Shim -Force
+    Write-Host 'Removed the csb.ps1 shim so csb works under any execution policy.' -ForegroundColor DarkGray
+  }
 } finally {
   Pop-Location
 }
@@ -171,10 +182,10 @@ Write-Host '  Start it:        csb open'
 Write-Host '  Check status:    csb info'
 Write-Host '  Install targets: csb install --recommended --yes'
 Write-Host ''
-Write-Host 'If csb is not found, open a new PowerShell window first.'
 if ((Get-ExecutionPolicy) -eq 'Restricted') {
-  Write-Host ''
-  Write-Host 'NOTE: The execution policy is Restricted, which blocks csb.ps1 (PowerShell prefers it over csb.cmd).' -ForegroundColor Yellow
-  Write-Host '  Either run once:            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned'
-  Write-Host '  Or use the .cmd shim:       csb.cmd open'
+  $prefixForNote = (& $npmCmd prefix -g 2>$null | Select-Object -First 1)
+  if (-not $prefixForNote) { $prefixForNote = Join-Path $env:APPDATA 'npm' }
+  if (Test-Path (Join-Path $prefixForNote 'csb.ps1')) {
+    Write-Host 'NOTE: csb.ps1 could not be removed; under the Restricted policy use: csb.cmd open' -ForegroundColor Yellow
+  }
 }
