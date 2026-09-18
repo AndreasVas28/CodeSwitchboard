@@ -11,6 +11,35 @@ test('converts function declarations', () => {
   assert.equal(convertTools([{ type: 'function', name: 'shell', parameters: { type: 'object' } }])[0].function.name, 'shell');
 });
 
+test('translates Codex special tools into function declarations', () => {
+  const tools = convertTools([
+    { type: 'local_shell' },
+    { type: 'custom', name: 'apply_patch', description: 'Apply a patch' },
+    { type: 'web_search' }
+  ]);
+  assert.equal(tools.length, 2);
+  const shell = tools.find((tool) => tool.function.name === 'local_shell');
+  assert.equal(shell.type, 'function');
+  assert.deepEqual(shell.function.parameters.required, ['command']);
+  const custom = tools.find((tool) => tool.function.name === 'apply_patch');
+  assert.deepEqual(custom.function.parameters.properties, { input: { type: 'string', description: 'The freeform input for this tool.' } });
+});
+
+test('replays Codex special tool history as function messages', () => {
+  const messages = convertInput([
+    { type: 'local_shell_call', call_id: 'call_s1', action: { type: 'exec', command: ['ls', '-la'] } },
+    { type: 'local_shell_call_output', call_id: 'call_s1', output: 'file.txt' },
+    { type: 'custom_tool_call', call_id: 'call_c1', name: 'apply_patch', input: '*** Begin Patch' },
+    { type: 'custom_tool_call_output', call_id: 'call_c1', output: 'Done!' }
+  ]);
+  assert.deepEqual(messages, [
+    { role: 'assistant', content: null, tool_calls: [{ id: 'call_s1', type: 'function', function: { name: 'local_shell', arguments: '{"type":"exec","command":["ls","-la"]}' } }] },
+    { role: 'tool', tool_call_id: 'call_s1', content: 'file.txt' },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'call_c1', type: 'function', function: { name: 'apply_patch', arguments: '{"input":"*** Begin Patch"}' } }] },
+    { role: 'tool', tool_call_id: 'call_c1', content: 'Done!' }
+  ]);
+});
+
 function parseSseEvents(text) {
   return [...text.matchAll(/data: (\{.*?\})\n\n/g)].map((match) => JSON.parse(match[1]));
 }
@@ -225,6 +254,52 @@ test('reports a stream that dies mid-answer instead of closing silently', async 
   const failed = events.find((event) => event.type === 'response.failed');
   assert.ok(failed, 'the stream must end with an explained failure');
   assert.match(failed.response.error.message, /stopped streaming before finishing/);
+});
+
+test('streams a local_shell tool call back to Codex as a local_shell_call item', async (context) => {
+  let receivedTools = null;
+  const upstream = http.createServer((request, response) => {
+    const chunks = [
+      { id: 'x', choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'call_1', function: { name: 'local_shell', arguments: '{"command":["echo","hi"]}' } }] }, finish_reason: null }] },
+      { id: 'x', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }
+    ];
+    (async () => {
+      let raw = '';
+      for await (const chunk of request) raw += chunk;
+      receivedTools = JSON.parse(raw).tools;
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      for (const chunk of chunks) response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      response.end('data: [DONE]\n\n');
+    })();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => upstream.close(resolve)));
+
+  const bridge = await startBridge({ port: 0, upstreamBaseUrl: `http://127.0.0.1:${upstream.address().port}/v1`, apiKey: 'k', providerName: 'nvidia', model: 'test/model' });
+  context.after(() => new Promise((resolve) => bridge.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${bridge.port}/v1/responses`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'test/model', input: 'list files', tools: [{ type: 'local_shell' }] })
+  });
+  assert.equal(response.status, 200);
+
+  // The provider received the shell tool as a plain function declaration.
+  assert.equal(receivedTools.length, 1);
+  assert.equal(receivedTools[0].type, 'function');
+  assert.equal(receivedTools[0].function.name, 'local_shell');
+
+  // Codex received the call in its own dialect.
+  const events = parseSseEvents(await response.text());
+  const added = events.find((event) => event.type === 'response.output_item.added' && event.item.type === 'local_shell_call');
+  const done = events.find((event) => event.type === 'response.output_item.done' && event.item.type === 'local_shell_call');
+  assert.ok(added, 'the shell call must be announced');
+  assert.ok(done, 'the shell call must be completed');
+  assert.deepEqual(done.item.action, { type: 'exec', command: ['echo', 'hi'] });
+
+  const completed = events.find((event) => event.type === 'response.completed');
+  assert.equal(completed.response.output[0].type, 'local_shell_call');
 });
 
 test('a busy requested port falls back to an available one', async (context) => {
