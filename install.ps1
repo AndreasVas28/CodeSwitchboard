@@ -137,14 +137,27 @@ if ($runningInsideCheckout) {
 }
 
 # --- 3. Dependencies + the global csb command -------------------------------
+# PowerShell prefers npm.ps1 over npm.cmd, and the default Restricted
+# execution policy blocks every .ps1 - so npm is invoked via npm.cmd.
+function Get-NpmCommand {
+  $cmd = Get-Command 'npm.cmd' -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $shim = Join-Path $env:APPDATA 'npm\npm.cmd'
+  if (Test-Path $shim) { return $shim }
+  return $null
+}
+
+$npmCmd = Get-NpmCommand
+if (-not $npmCmd) { throw 'npm.cmd was not found although Node.js is installed. Open a new PowerShell window and run the installer again.' }
+
 Push-Location $installDir
 try {
   Write-Host '==> Installing dependencies (npm ci)...' -ForegroundColor Cyan
-  npm ci
+  & $npmCmd ci
   if ($LASTEXITCODE -ne 0) { throw 'npm ci failed. If a native build failed, install the Visual Studio C++ build tools and Python, then run the installer again.' }
 
   Write-Host '==> Linking the csb command (npm link)...' -ForegroundColor Cyan
-  npm link
+  & $npmCmd link
   if ($LASTEXITCODE -ne 0) {
     Write-Host 'npm link failed. You can still start CodeSwitchboard with: node bin\csb.js open' -ForegroundColor Yellow
   }
@@ -159,3 +172,9 @@ Write-Host '  Check status:    csb info'
 Write-Host '  Install targets: csb install --recommended --yes'
 Write-Host ''
 Write-Host 'If csb is not found, open a new PowerShell window first.'
+if ((Get-ExecutionPolicy) -eq 'Restricted') {
+  Write-Host ''
+  Write-Host 'NOTE: The execution policy is Restricted, which blocks csb.ps1 (PowerShell prefers it over csb.cmd).' -ForegroundColor Yellow
+  Write-Host '  Either run once:            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned'
+  Write-Host '  Or use the .cmd shim:       csb.cmd open'
+}
